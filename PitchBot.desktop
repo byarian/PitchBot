@@ -1,0 +1,12 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=PitchBot
+GenericName=MLB Ball/Strike Tracker
+Comment=Visualize MLB umpire ball/strike accuracy using Statcast data
+Exec=/home/user/PitchBot/start.sh
+Icon=/home/user/PitchBot/assets/icon.svg
+Terminal=false
+StartupNotify=true
+Categories=Sports;Education;
+Keywords=baseball;umpire;pitching;MLB;statcast;

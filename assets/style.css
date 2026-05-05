@@ -1,0 +1,227 @@
+/* PitchBot Custom Styles */
+
+:root {
+  --bg-primary: #0d1117;
+  --bg-secondary: #161b22;
+  --bg-card: #1c2333;
+  --bg-input: #21262d;
+  --border-color: #30363d;
+  --text-primary: #e6edf3;
+  --text-secondary: #8b949e;
+  --accent-green: #2ecc71;
+  --accent-red: #e74c3c;
+  --accent-blue: #3498db;
+  --accent-orange: #f39c12;
+  --accent-purple: #9b59b6;
+  --accent-highlight: #1f6feb;
+}
+
+body {
+  background-color: var(--bg-primary) !important;
+  color: var(--text-primary) !important;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif;
+}
+
+/* Navbar */
+.pitchbot-navbar {
+  background: linear-gradient(90deg, #0d1117 0%, #0f3460 100%) !important;
+  border-bottom: 1px solid var(--border-color);
+  padding: 0.6rem 1.5rem;
+}
+
+.pitchbot-brand {
+  font-size: 1.5rem;
+  font-weight: 700;
+  letter-spacing: 1px;
+  color: #ffffff !important;
+}
+
+.pitchbot-brand span {
+  color: var(--accent-green);
+}
+
+.last-updated-badge {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  padding: 0.2rem 0.6rem;
+  background: rgba(255,255,255,0.05);
+  border-radius: 12px;
+  border: 1px solid var(--border-color);
+}
+
+/* Filter panel */
+.filter-card {
+  background: var(--bg-card) !important;
+  border: 1px solid var(--border-color) !important;
+  border-radius: 8px;
+  margin-bottom: 1rem;
+}
+
+.filter-label {
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  color: var(--text-secondary);
+  margin-bottom: 0.3rem;
+}
+
+/* KPI Cards */
+.kpi-card {
+  background: var(--bg-card) !important;
+  border: 1px solid var(--border-color) !important;
+  border-radius: 8px;
+  padding: 1rem;
+  text-align: center;
+  transition: border-color 0.2s;
+}
+
+.kpi-card:hover {
+  border-color: var(--accent-highlight) !important;
+}
+
+.kpi-value {
+  font-size: 2rem;
+  font-weight: 700;
+  line-height: 1.1;
+  margin-bottom: 0.25rem;
+}
+
+.kpi-label {
+  font-size: 0.72rem;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  color: var(--text-secondary);
+}
+
+.kpi-green { color: var(--accent-green); }
+.kpi-red { color: var(--accent-red); }
+.kpi-orange { color: var(--accent-orange); }
+.kpi-blue { color: var(--accent-blue); }
+.kpi-purple { color: var(--accent-purple); }
+.kpi-white { color: var(--text-primary); }
+
+/* Plot card */
+.plot-card {
+  background: var(--bg-card) !important;
+  border: 1px solid var(--border-color) !important;
+  border-radius: 8px;
+  padding: 0.75rem;
+}
+
+/* Tables */
+.dash-table-container .dash-spreadsheet-container .dash-spreadsheet-inner table {
+  background-color: var(--bg-card) !important;
+  color: var(--text-primary) !important;
+  font-size: 0.82rem;
+}
+
+.dash-table-container .dash-spreadsheet-container .dash-spreadsheet-inner td,
+.dash-table-container .dash-spreadsheet-container .dash-spreadsheet-inner th {
+  border: 1px solid var(--border-color) !important;
+  background-color: transparent !important;
+  color: var(--text-primary) !important;
+}
+
+.dash-table-container .dash-spreadsheet-container .dash-spreadsheet-inner tr:hover td {
+  background-color: rgba(31, 111, 235, 0.1) !important;
+}
+
+/* Dropdown overrides */
+.Select-control, .VirtualizedSelectFocusedOption, .Select-menu-outer {
+  background-color: var(--bg-input) !important;
+  color: var(--text-primary) !important;
+  border-color: var(--border-color) !important;
+}
+
+.Select-value-label {
+  color: var(--text-primary) !important;
+}
+
+/* Plotly chart bg matching */
+.js-plotly-plot .plotly .bg {
+  fill: var(--bg-card) !important;
+}
+
+/* Tabs */
+.nav-tabs {
+  border-bottom: 1px solid var(--border-color) !important;
+}
+
+.nav-tabs .nav-link {
+  color: var(--text-secondary) !important;
+  border: none !important;
+  font-size: 0.8rem;
+  font-weight: 500;
+  padding: 0.5rem 0.75rem;
+}
+
+.nav-tabs .nav-link.active {
+  color: var(--accent-highlight) !important;
+  border-bottom: 2px solid var(--accent-highlight) !important;
+  background: transparent !important;
+}
+
+/* Loading spinner */
+._dash-loading {
+  color: var(--accent-green) !important;
+}
+
+/* No-data message */
+.no-data-msg {
+  text-align: center;
+  color: var(--text-secondary);
+  padding: 3rem;
+  font-size: 0.95rem;
+}
+
+.no-data-msg code {
+  background: var(--bg-input);
+  padding: 0.15rem 0.4rem;
+  border-radius: 4px;
+  color: var(--accent-green);
+  font-size: 0.85rem;
+}
+
+/* Legend indicator dots */
+.legend-dot {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  margin-right: 5px;
+}
+
+/* Section headers */
+.section-header {
+  font-size: 0.78rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  color: var(--text-secondary);
+  border-bottom: 1px solid var(--border-color);
+  padding-bottom: 0.4rem;
+  margin-bottom: 0.75rem;
+}
+
+/* Apply / Reset buttons */
+.btn-apply {
+  background-color: var(--accent-highlight) !important;
+  border-color: var(--accent-highlight) !important;
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
+.btn-reset {
+  background-color: transparent !important;
+  border-color: var(--border-color) !important;
+  color: var(--text-secondary) !important;
+  font-size: 0.8rem;
+}
+
+/* Scrollbar */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: var(--bg-primary); }
+::-webkit-scrollbar-thumb { background: var(--border-color); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: #484f58; }

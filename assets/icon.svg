@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120" width="120" height="120">
+  <!-- Background circle -->
+  <circle cx="60" cy="60" r="58" fill="#1a1a2e" stroke="#0f3460" stroke-width="3"/>
+  <!-- Baseball stitching arcs -->
+  <path d="M 42 22 Q 32 60 42 98" fill="none" stroke="#e74c3c" stroke-width="3" stroke-linecap="round"/>
+  <path d="M 78 22 Q 88 60 78 98" fill="none" stroke="#e74c3c" stroke-width="3" stroke-linecap="round"/>
+  <!-- Cross stitches left arc -->
+  <line x1="35" y1="36" x2="42" y2="38" stroke="#e74c3c" stroke-width="1.5"/>
+  <line x1="33" y1="46" x2="40" y2="47" stroke="#e74c3c" stroke-width="1.5"/>
+  <line x1="32" y1="56" x2="39" y2="56" stroke="#e74c3c" stroke-width="1.5"/>
+  <line x1="33" y1="66" x2="40" y2="65" stroke="#e74c3c" stroke-width="1.5"/>
+  <line x1="35" y1="76" x2="42" y2="74" stroke="#e74c3c" stroke-width="1.5"/>
+  <line x1="38" y1="85" x2="44" y2="83" stroke="#e74c3c" stroke-width="1.5"/>
+  <!-- Cross stitches right arc -->
+  <line x1="85" y1="36" x2="78" y2="38" stroke="#e74c3c" stroke-width="1.5"/>
+  <line x1="87" y1="46" x2="80" y2="47" stroke="#e74c3c" stroke-width="1.5"/>
+  <line x1="88" y1="56" x2="81" y2="56" stroke="#e74c3c" stroke-width="1.5"/>
+  <line x1="87" y1="66" x2="80" y2="65" stroke="#e74c3c" stroke-width="1.5"/>
+  <line x1="85" y1="76" x2="78" y2="74" stroke="#e74c3c" stroke-width="1.5"/>
+  <line x1="82" y1="85" x2="76" y2="83" stroke="#e74c3c" stroke-width="1.5"/>
+  <!-- Strike zone rectangle -->
+  <rect x="38" y="32" width="44" height="52" fill="none" stroke="#2ecc71" stroke-width="2.5" rx="1"/>
+  <!-- Zone grid lines -->
+  <line x1="38" y1="49" x2="82" y2="49" stroke="#2ecc71" stroke-width="0.8" opacity="0.5"/>
+  <line x1="38" y1="67" x2="82" y2="67" stroke="#2ecc71" stroke-width="0.8" opacity="0.5"/>
+  <line x1="53" y1="32" x2="53" y2="84" stroke="#2ecc71" stroke-width="0.8" opacity="0.5"/>
+  <line x1="67" y1="32" x2="67" y2="84" stroke="#2ecc71" stroke-width="0.8" opacity="0.5"/>
+  <!-- Pitch dot examples -->
+  <circle cx="48" cy="42" r="3.5" fill="#2ecc71" opacity="0.9"/>
+  <circle cx="72" cy="56" r="3.5" fill="#e74c3c" opacity="0.9"/>
+  <circle cx="55" cy="72" r="3.5" fill="#f39c12" opacity="0.9"/>
+  <circle cx="76" cy="88" r="3.5" fill="#3498db" opacity="0.9"/>
+</svg>
