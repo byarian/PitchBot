@@ -2,7 +2,6 @@
 
 import os
 import sqlite3
-from datetime import datetime
 
 DB_PATH = os.path.join(os.path.dirname(__file__), "data", "pitchbot.db")
 
@@ -22,6 +21,8 @@ CREATE TABLE IF NOT EXISTS pitches (
     batter_name     TEXT,
     home_team       TEXT,
     away_team       TEXT,
+    hitting_team    TEXT,
+    pitching_team   TEXT,
     inning          INTEGER,
     inning_topbot   TEXT,
     description     TEXT,
@@ -59,12 +60,11 @@ CREATE TABLE IF NOT EXISTS update_log (
     created_at    TEXT
 );
 
-CREATE INDEX IF NOT EXISTS idx_pitches_date     ON pitches(game_date);
-CREATE INDEX IF NOT EXISTS idx_pitches_umpire   ON pitches(umpire);
-CREATE INDEX IF NOT EXISTS idx_pitches_pitcher  ON pitches(pitcher_id);
-CREATE INDEX IF NOT EXISTS idx_pitches_batter   ON pitches(batter_id);
-CREATE INDEX IF NOT EXISTS idx_pitches_called   ON pitches(is_called);
-CREATE INDEX IF NOT EXISTS idx_pitches_team     ON pitches(home_team, away_team);
+CREATE INDEX IF NOT EXISTS idx_pitches_date    ON pitches(game_date);
+CREATE INDEX IF NOT EXISTS idx_pitches_umpire  ON pitches(umpire);
+CREATE INDEX IF NOT EXISTS idx_pitches_pitcher ON pitches(pitcher_id);
+CREATE INDEX IF NOT EXISTS idx_pitches_batter  ON pitches(batter_id);
+CREATE INDEX IF NOT EXISTS idx_pitches_called  ON pitches(is_called);
 """
 
 
@@ -76,7 +76,33 @@ def init_db():
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
     with sqlite3.connect(DB_PATH) as conn:
         conn.executescript(DDL)
+    _migrate()
 
+
+def _migrate():
+    """Add columns introduced after initial release without breaking existing DBs."""
+    with sqlite3.connect(DB_PATH) as conn:
+        existing = {r[1] for r in conn.execute("PRAGMA table_info(pitches)")}
+        for col in ("hitting_team", "pitching_team"):
+            if col not in existing:
+                conn.execute(f"ALTER TABLE pitches ADD COLUMN {col} TEXT")
+        # Back-fill hitting_team / pitching_team for rows that predate the column.
+        conn.execute("""
+            UPDATE pitches
+            SET hitting_team  = CASE WHEN inning_topbot='Top' THEN away_team ELSE home_team END,
+                pitching_team = CASE WHEN inning_topbot='Top' THEN home_team ELSE away_team END
+            WHERE hitting_team IS NULL AND inning_topbot IS NOT NULL
+        """)
+        # Team indexes — created here so they exist even when added via ALTER TABLE
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_pitches_hitting_team"
+                     " ON pitches(hitting_team)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_pitches_pitching_team"
+                     " ON pitches(pitching_team)")
+
+
+# ---------------------------------------------------------------------------
+# Simple getters
+# ---------------------------------------------------------------------------
 
 def get_last_game_date():
     if not os.path.exists(DB_PATH):
@@ -114,7 +140,7 @@ def log_update(fetch_start, fetch_end, pitches_added, status, error_msg=None):
 def upsert_player(player_id, player_name):
     with sqlite3.connect(DB_PATH) as conn:
         conn.execute(
-            "INSERT OR REPLACE INTO players(player_id, player_name, updated_at) VALUES(?,?,datetime('now'))",
+            "INSERT OR REPLACE INTO players(player_id,player_name,updated_at) VALUES(?,?,datetime('now'))",
             (player_id, player_name),
         )
 
@@ -128,67 +154,11 @@ def get_player_name(player_id):
 
 
 # ---------------------------------------------------------------------------
-# Filter helpers
-# ---------------------------------------------------------------------------
-
-def get_filter_options():
-    """Return dicts of dropdown options for filters."""
-    if not os.path.exists(DB_PATH):
-        return {k: [] for k in ("umpires", "teams", "pitch_types", "pitchers", "batters")}
-    with sqlite3.connect(DB_PATH) as conn:
-        umpires = [
-            {"label": r[0], "value": r[0]}
-            for r in conn.execute(
-                "SELECT DISTINCT umpire FROM pitches WHERE umpire IS NOT NULL AND umpire != '' ORDER BY umpire"
-            )
-        ]
-        teams_raw = set()
-        for r in conn.execute("SELECT DISTINCT home_team, away_team FROM pitches WHERE home_team IS NOT NULL"):
-            if r[0]:
-                teams_raw.add(r[0])
-            if r[1]:
-                teams_raw.add(r[1])
-        teams = [{"label": t, "value": t} for t in sorted(teams_raw)]
-
-        pitch_types = [
-            {"label": f"{r[0]} ({r[1]:,})", "value": r[0]}
-            for r in conn.execute(
-                "SELECT pitch_type, COUNT(*) AS n FROM pitches WHERE pitch_type IS NOT NULL AND is_called=1"
-                " GROUP BY pitch_type ORDER BY n DESC"
-            )
-        ]
-        pitchers = [
-            {"label": r[0] or f"ID {r[1]}", "value": r[1]}
-            for r in conn.execute(
-                "SELECT pitcher_name, pitcher_id FROM pitches WHERE pitcher_id IS NOT NULL"
-                " GROUP BY pitcher_id ORDER BY pitcher_name"
-            )
-        ]
-        batters_sql = """
-            SELECT COALESCE(pl.player_name, 'ID '||p.batter_id), p.batter_id
-            FROM (SELECT DISTINCT batter_id FROM pitches WHERE batter_id IS NOT NULL) p
-            LEFT JOIN players pl ON pl.player_id = p.batter_id
-            ORDER BY 1
-        """
-        batters = [
-            {"label": r[0], "value": r[1]}
-            for r in conn.execute(batters_sql)
-        ]
-    return {
-        "umpires": umpires,
-        "teams": teams,
-        "pitch_types": pitch_types,
-        "pitchers": pitchers,
-        "batters": batters,
-    }
-
-
-# ---------------------------------------------------------------------------
-# Main data queries
+# WHERE clause builder
 # ---------------------------------------------------------------------------
 
 def _build_where(filters):
-    """Build WHERE clause and params list from filter dict. Always limits to is_called=1."""
+    """Return (where_str, params) for is_called pitches matching filters."""
     clauses = ["is_called = 1"]
     params = []
 
@@ -199,24 +169,28 @@ def _build_where(filters):
         clauses.append("game_date <= ?")
         params.append(filters["end_date"])
     if filters.get("umpires"):
-        placeholders = ",".join("?" * len(filters["umpires"]))
-        clauses.append(f"umpire IN ({placeholders})")
+        ph = ",".join("?" * len(filters["umpires"]))
+        clauses.append(f"umpire IN ({ph})")
         params.extend(filters["umpires"])
-    if filters.get("teams"):
-        placeholders = ",".join("?" * len(filters["teams"]))
-        clauses.append(f"(home_team IN ({placeholders}) OR away_team IN ({placeholders}))")
-        params.extend(filters["teams"] * 2)
+    if filters.get("hitting_teams"):
+        ph = ",".join("?" * len(filters["hitting_teams"]))
+        clauses.append(f"hitting_team IN ({ph})")
+        params.extend(filters["hitting_teams"])
+    if filters.get("pitching_teams"):
+        ph = ",".join("?" * len(filters["pitching_teams"]))
+        clauses.append(f"pitching_team IN ({ph})")
+        params.extend(filters["pitching_teams"])
     if filters.get("pitchers"):
-        placeholders = ",".join("?" * len(filters["pitchers"]))
-        clauses.append(f"pitcher_id IN ({placeholders})")
+        ph = ",".join("?" * len(filters["pitchers"]))
+        clauses.append(f"pitcher_id IN ({ph})")
         params.extend(filters["pitchers"])
     if filters.get("batters"):
-        placeholders = ",".join("?" * len(filters["batters"]))
-        clauses.append(f"batter_id IN ({placeholders})")
+        ph = ",".join("?" * len(filters["batters"]))
+        clauses.append(f"batter_id IN ({ph})")
         params.extend(filters["batters"])
     if filters.get("pitch_types"):
-        placeholders = ",".join("?" * len(filters["pitch_types"]))
-        clauses.append(f"pitch_type IN ({placeholders})")
+        ph = ",".join("?" * len(filters["pitch_types"]))
+        clauses.append(f"pitch_type IN ({ph})")
         params.extend(filters["pitch_types"])
     if filters.get("p_throws") and filters["p_throws"] != "B":
         clauses.append("p_throws = ?")
@@ -231,18 +205,102 @@ def _build_where(filters):
     return " AND ".join(clauses), params
 
 
+# ---------------------------------------------------------------------------
+# Dynamic (cascading) filter options
+# ---------------------------------------------------------------------------
+
+def get_dynamic_options(filters=None):
+    """
+    Return dropdown options for every filter, narrowed by all currently active
+    filters.  Firing on every filter-change gives the cascading update behaviour.
+    """
+    empty = {k: [] for k in ("umpires", "hitting_teams", "pitching_teams",
+                              "pitch_types", "pitchers", "batters")}
+    if not os.path.exists(DB_PATH):
+        return empty
+
+    filters = filters or {}
+    where, params = _build_where(filters)
+
+    with sqlite3.connect(DB_PATH) as conn:
+        umpires = [
+            {"label": r[0], "value": r[0]}
+            for r in conn.execute(
+                f"SELECT DISTINCT umpire FROM pitches"
+                f" WHERE {where} AND umpire IS NOT NULL AND umpire != '' ORDER BY umpire",
+                params,
+            )
+        ]
+        hitting_teams = [
+            {"label": r[0], "value": r[0]}
+            for r in conn.execute(
+                f"SELECT DISTINCT hitting_team FROM pitches"
+                f" WHERE {where} AND hitting_team IS NOT NULL ORDER BY hitting_team",
+                params,
+            )
+        ]
+        pitching_teams = [
+            {"label": r[0], "value": r[0]}
+            for r in conn.execute(
+                f"SELECT DISTINCT pitching_team FROM pitches"
+                f" WHERE {where} AND pitching_team IS NOT NULL ORDER BY pitching_team",
+                params,
+            )
+        ]
+        pitch_types = [
+            {"label": f"{r[0]} ({r[1]:,})", "value": r[0]}
+            for r in conn.execute(
+                f"SELECT pitch_type, COUNT(*) n FROM pitches"
+                f" WHERE {where} AND pitch_type IS NOT NULL GROUP BY pitch_type ORDER BY n DESC",
+                params,
+            )
+        ]
+        pitchers = [
+            {"label": r[0] or f"ID {r[1]}", "value": r[1]}
+            for r in conn.execute(
+                f"SELECT pitcher_name, pitcher_id FROM pitches"
+                f" WHERE {where} AND pitcher_id IS NOT NULL"
+                f" GROUP BY pitcher_id ORDER BY pitcher_name",
+                params,
+            )
+        ]
+        # Subquery reuses same params — SQLite matches placeholders in order
+        batter_sql = (
+            f"SELECT COALESCE(pl.player_name,'ID '||p.batter_id), p.batter_id"
+            f" FROM (SELECT DISTINCT batter_id FROM pitches WHERE {where}"
+            f"       AND batter_id IS NOT NULL) p"
+            f" LEFT JOIN players pl ON pl.player_id = p.batter_id ORDER BY 1"
+        )
+        batters = [
+            {"label": r[0], "value": r[1]}
+            for r in conn.execute(batter_sql, params)
+        ]
+
+    return {
+        "umpires": umpires,
+        "hitting_teams": hitting_teams,
+        "pitching_teams": pitching_teams,
+        "pitch_types": pitch_types,
+        "pitchers": pitchers,
+        "batters": batters,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Data queries
+# ---------------------------------------------------------------------------
+
 def query_pitches(filters=None, limit=15000):
-    """Return individual pitch rows for scatter plot."""
     if not os.path.exists(DB_PATH):
         return []
     filters = filters or {}
     where, params = _build_where(filters)
     sql = f"""
-        SELECT
-            game_date, pitcher_name, batter_name, batter_id, umpire,
-            home_team, away_team, pitch_type, release_speed,
-            p_throws, stand, plate_x, plate_z, sz_top, sz_bot,
-            description, in_zone, correct_call, abs_result, zone
+        SELECT game_date, pitcher_name, batter_name, batter_id, umpire,
+               home_team, away_team, hitting_team, pitching_team,
+               pitch_type, release_speed, p_throws, stand,
+               plate_x, plate_z, sz_top, sz_bot,
+               description, in_zone, correct_call, abs_result, zone
         FROM pitches
         WHERE {where}
         ORDER BY game_date DESC, game_pk DESC, at_bat_number DESC, pitch_number DESC
@@ -254,31 +312,19 @@ def query_pitches(filters=None, limit=15000):
     return [dict(r) for r in rows]
 
 
-def query_total_called(filters=None):
-    if not os.path.exists(DB_PATH):
-        return 0
-    filters = filters or {}
-    where, params = _build_where(filters)
-    with sqlite3.connect(DB_PATH) as conn:
-        row = conn.execute(f"SELECT COUNT(*) FROM pitches WHERE {where}", params).fetchone()
-    return row[0] if row else 0
-
-
 def query_summary_stats(filters=None):
-    """Return aggregated stats dict."""
     if not os.path.exists(DB_PATH):
         return {}
     filters = filters or {}
     where, params = _build_where(filters)
     with sqlite3.connect(DB_PATH) as conn:
         row = conn.execute(
-            f"""SELECT
-                COUNT(*) AS total,
-                SUM(correct_call) AS correct,
-                SUM(CASE WHEN correct_call=0 AND description='called_strike' THEN 1 ELSE 0 END) AS phantom_strikes,
-                SUM(CASE WHEN correct_call=0 AND description='ball' THEN 1 ELSE 0 END) AS missed_strikes,
-                SUM(CASE WHEN abs_result='overturned' THEN 1 ELSE 0 END) AS abs_overturned
-            FROM pitches WHERE {where}""",
+            f"""SELECT COUNT(*),
+                       SUM(correct_call),
+                       SUM(CASE WHEN correct_call=0 AND description='called_strike' THEN 1 ELSE 0 END),
+                       SUM(CASE WHEN correct_call=0 AND description='ball'          THEN 1 ELSE 0 END),
+                       SUM(CASE WHEN abs_result='overturned' THEN 1 ELSE 0 END)
+                FROM pitches WHERE {where}""",
             params,
         ).fetchone()
     if not row or not row[0]:
@@ -287,25 +333,23 @@ def query_summary_stats(filters=None):
 
 
 def query_by_group(group_col, filters=None, limit=25):
-    """Return miss-rate aggregation by group_col."""
     if not os.path.exists(DB_PATH):
         return []
     filters = filters or {}
     where, params = _build_where(filters)
-    label_join = ""
-    select_col = f"p.{group_col}"
+    join = ""
+    sel = f"p.{group_col}"
     if group_col == "batter_id":
-        label_join = "LEFT JOIN players pl ON pl.player_id = p.batter_id"
-        select_col = "COALESCE(pl.player_name, 'ID '||p.batter_id)"
+        join = "LEFT JOIN players pl ON pl.player_id = p.batter_id"
+        sel = "COALESCE(pl.player_name,'ID '||p.batter_id)"
     sql = f"""
-        SELECT {select_col} AS grp,
+        SELECT {sel} AS grp,
                COUNT(*) AS called,
                SUM(CASE WHEN p.correct_call=0 THEN 1 ELSE 0 END) AS incorrect,
                ROUND(100.0*SUM(CASE WHEN p.correct_call=0 THEN 1 ELSE 0 END)/COUNT(*),1) AS miss_rate
-        FROM pitches p
-        {label_join}
+        FROM pitches p {join}
         WHERE {where} AND {group_col} IS NOT NULL AND {group_col} != ''
-        GROUP BY {select_col}
+        GROUP BY {sel}
         HAVING called >= 10
         ORDER BY miss_rate DESC
         LIMIT {int(limit)}
@@ -316,7 +360,6 @@ def query_by_group(group_col, filters=None, limit=25):
 
 
 def query_by_pitch_type_hand(filters=None):
-    """Return miss rate breakdown by pitch_type × p_throws."""
     if not os.path.exists(DB_PATH):
         return []
     filters = filters or {}
@@ -334,7 +377,5 @@ def query_by_pitch_type_hand(filters=None):
     """
     with sqlite3.connect(DB_PATH) as conn:
         rows = conn.execute(sql, params).fetchall()
-    return [
-        {"pitch_type": r[0], "p_throws": r[1], "called": r[2], "incorrect": r[3], "miss_rate": r[4]}
-        for r in rows
-    ]
+    return [{"pitch_type": r[0], "p_throws": r[1], "called": r[2], "incorrect": r[3], "miss_rate": r[4]}
+            for r in rows]

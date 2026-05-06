@@ -1,8 +1,7 @@
 """PitchBot — MLB Ball/Strike Accuracy Tracker."""
 
-import json
 import os
-from datetime import date, timedelta
+from datetime import date
 
 import dash
 import dash_bootstrap_components as dbc
@@ -12,7 +11,7 @@ import plotly.graph_objects as go
 from dash import Input, Output, State, callback, ctx, dash_table, dcc, html
 
 from database import (
-    get_filter_options,
+    get_dynamic_options,
     get_first_game_date,
     get_last_game_date,
     get_pitch_count,
@@ -27,29 +26,28 @@ from database import (
 # Constants
 # ---------------------------------------------------------------------------
 
-STRIKE_ZONE_LEFT = -0.83
-STRIKE_ZONE_RIGHT = 0.83
-TYPICAL_SZ_TOP = 3.5
-TYPICAL_SZ_BOT = 1.5
+STRIKE_ZONE_LEFT  = -0.83
+STRIKE_ZONE_RIGHT =  0.83
+TYPICAL_SZ_TOP    =  3.5
+TYPICAL_SZ_BOT    =  1.5
 
 PITCH_NAMES = {
-    "FF": "4-Seam FB", "FA": "Fastball", "SI": "Sinker",
-    "FC": "Cutter", "SL": "Slider", "SW": "Sweeper",
-    "SV": "Sweeper", "ST": "Swp. Curve", "CH": "Changeup",
-    "CU": "Curveball", "KC": "Knuckle Curve", "FS": "Splitter",
-    "KN": "Knuckleball", "EP": "Eephus", "FO": "Forkball",
-    "SC": "Screwball", "CS": "Slow Curve", "PO": "Pitchout",
+    "FF": "4-Seam FB", "FA": "Fastball",  "SI": "Sinker",
+    "FC": "Cutter",    "SL": "Slider",    "SW": "Sweeper",
+    "SV": "Sweeper",   "ST": "Swp. Curve","CH": "Changeup",
+    "CU": "Curveball", "KC": "Knkl. Curve","FS": "Splitter",
+    "KN": "Knuckleball","EP": "Eephus",   "FO": "Forkball",
+    "SC": "Screwball", "CS": "Slow Curve","PO": "Pitchout",
     "IN": "Int. Ball",
 }
 
-CAT_COLORS = {
+CAT_COLORS  = {
     "correct_strike": "#2ecc71",
     "correct_ball":   "#3498db",
     "phantom_strike": "#e74c3c",
     "missed_strike":  "#f39c12",
     "abs_overturned": "#9b59b6",
 }
-
 CAT_SYMBOLS = {
     "correct_strike": "circle",
     "correct_ball":   "circle-open",
@@ -57,8 +55,7 @@ CAT_SYMBOLS = {
     "missed_strike":  "diamond-open",
     "abs_overturned": "star",
 }
-
-CAT_LABELS = {
+CAT_LABELS  = {
     "correct_strike": "Correct Strike",
     "correct_ball":   "Correct Ball",
     "phantom_strike": "Phantom Strike (bad call)",
@@ -66,10 +63,10 @@ CAT_LABELS = {
     "abs_overturned": "ABS Overturned",
 }
 
-PLOT_BG = "#0d1117"
-PLOT_PAPER = "#0d1117"
-AXIS_COLOR = "#30363d"
-TEXT_COLOR = "#8b949e"
+PLOT_BG     = "#0d1117"
+PLOT_PAPER  = "#0d1117"
+AXIS_COLOR  = "#30363d"
+TEXT_COLOR  = "#8b949e"
 
 
 # ---------------------------------------------------------------------------
@@ -89,67 +86,56 @@ server = app.server
 
 
 # ---------------------------------------------------------------------------
-# Helper: build strike zone figure
+# Plot builders
 # ---------------------------------------------------------------------------
 
-def _compute_zone_distance(plate_x, plate_z, sz_top, sz_bot):
-    """Return (h_dist_in, v_dist_in, side_str) where positive = inside zone."""
+def _zone_distance(plate_x, plate_z, sz_top, sz_bot):
     try:
         px, pz = float(plate_x), float(plate_z)
         st, sb = float(sz_top or TYPICAL_SZ_TOP), float(sz_bot or TYPICAL_SZ_BOT)
     except (TypeError, ValueError):
         return None, None, ""
-    h_margin = (STRIKE_ZONE_RIGHT - abs(px)) * 12      # positive = inside
+    h_margin = (STRIKE_ZONE_RIGHT - abs(px)) * 12
     if pz > st:
-        v_margin = -(pz - st) * 12                     # above zone
-        v_side = "above"
+        v_margin, v_side = -(pz - st) * 12, "above"
     elif pz < sb:
-        v_margin = -(sb - pz) * 12                     # below zone
-        v_side = "below"
+        v_margin, v_side = -(sb - pz) * 12, "below"
     else:
-        v_margin = min((st - pz), (pz - sb)) * 12      # inside zone
-        v_side = "inside"
+        v_margin = min(st - pz, pz - sb) * 12
+        v_side   = "inside"
     return h_margin, v_margin, v_side
 
 
-def _hover_text(r):
-    pitcher = f"{r.get('pitcher_name') or '?'} ({'RHP' if r.get('p_throws') == 'R' else 'LHP' if r.get('p_throws') == 'L' else '?'})"
-    bname = r.get("batter_name") or f"ID {r.get('batter_id', '?')}"
-    batter = f"{bname} ({'RHB' if r.get('stand') == 'R' else 'LHB' if r.get('stand') == 'L' else '?'})"
-    pt = PITCH_NAMES.get(r.get("pitch_type", ""), r.get("pitch_type") or "?")
-    spd = f"{r['release_speed']:.1f} mph" if r.get("release_speed") else "? mph"
-    called = "Called STRIKE" if r.get("description") == "called_strike" else "Called BALL"
+def _hover(r):
+    pitcher = f"{r.get('pitcher_name') or '?'} ({'RHP' if r.get('p_throws')=='R' else 'LHP' if r.get('p_throws')=='L' else '?'})"
+    bname   = r.get("batter_name") or f"ID {r.get('batter_id','?')}"
+    batter  = f"{bname} ({'RHB' if r.get('stand')=='R' else 'LHB' if r.get('stand')=='L' else '?'})"
+    pt      = PITCH_NAMES.get(r.get("pitch_type",""), r.get("pitch_type") or "?")
+    spd     = f"{r['release_speed']:.1f} mph" if r.get("release_speed") else "? mph"
+    called  = "Called STRIKE" if r.get("description") == "called_strike" else "Called BALL"
     if r.get("correct_call") == 1:
         verdict = "✓ Correct"
     elif r.get("correct_call") == 0:
-        if r.get("description") == "called_strike":
-            verdict = "✗ Phantom Strike (should be BALL)"
-        else:
-            verdict = "✗ Missed Strike (should be STRIKE)"
+        verdict = ("✗ Phantom Strike (should be BALL)"
+                   if r.get("description") == "called_strike"
+                   else "✗ Missed Strike (should be STRIKE)")
     else:
         verdict = "—"
-    h_d, v_d, v_side = _compute_zone_distance(
-        r.get("plate_x"), r.get("plate_z"), r.get("sz_top"), r.get("sz_bot")
-    )
-    if h_d is not None:
-        h_str = f"{abs(h_d):.1f}\" {'inside' if h_d > 0 else 'outside'} (H)"
-    else:
-        h_str = "?"
-    if v_d is not None:
-        v_str = f"{abs(v_d):.1f}\" {v_side} (V)"
-    else:
-        v_str = "?"
-    ump = r.get("umpire") or "?"
-    gdate = r.get("game_date", "?")
-    teams = f"{r.get('away_team','?')} @ {r.get('home_team','?')}"
-    abs_str = f"ABS: {r['abs_result'].title()}" if r.get("abs_result") else "ABS: Not challenged"
+    h_d, v_d, v_side = _zone_distance(r.get("plate_x"), r.get("plate_z"),
+                                       r.get("sz_top"), r.get("sz_bot"))
+    h_str = f"{abs(h_d):.1f}\" {'inside' if h_d and h_d > 0 else 'outside'} (H)" if h_d is not None else "?"
+    v_str = f"{abs(v_d):.1f}\" {v_side} (V)" if v_d is not None else "?"
+    abs_s = f"ABS: {r['abs_result'].title()}" if r.get("abs_result") else "ABS: Not challenged"
+    hit_t = r.get("hitting_team") or "?"
+    pit_t = r.get("pitching_team") or "?"
     return (
         f"<b>{pitcher}</b> vs {batter}<br>"
-        f"Umpire: {ump} | {gdate} | {teams}<br>"
+        f"Umpire: {r.get('umpire') or '?'} | {r.get('game_date','?')}<br>"
+        f"Batting: {hit_t}  Pitching: {pit_t}<br>"
         f"<br><b>{called}</b>  {verdict}<br>"
         f"<br>Pitch: {pt} @ {spd}<br>"
         f"Zone edge: {h_str} | {v_str}<br>"
-        f"{abs_str}"
+        f"{abs_s}"
     )
 
 
@@ -164,154 +150,92 @@ def _categorize(r):
 
 
 def build_scatter_figure(pitches, total_count):
-    """Build the strike zone scatter plot."""
     fig = go.Figure()
 
-    # Compute average zone for this filter
     szs = [(r.get("sz_top"), r.get("sz_bot")) for r in pitches if r.get("sz_top") and r.get("sz_bot")]
-    if szs:
-        sz_top = float(np.median([s[0] for s in szs]))
-        sz_bot = float(np.median([s[1] for s in szs]))
-    else:
-        sz_top, sz_bot = TYPICAL_SZ_TOP, TYPICAL_SZ_BOT
+    sz_top = float(np.median([s[0] for s in szs])) if szs else TYPICAL_SZ_TOP
+    sz_bot = float(np.median([s[1] for s in szs])) if szs else TYPICAL_SZ_BOT
 
-    # Zone height thirds
     h_step = (sz_top - sz_bot) / 3
-
-    # Draw zone 9-cell grid
     for yi in [sz_bot + h_step, sz_bot + 2 * h_step]:
-        fig.add_shape(type="line", x0=STRIKE_ZONE_LEFT, x1=STRIKE_ZONE_RIGHT,
-                      y0=yi, y1=yi, line=dict(color="rgba(200,200,200,0.25)", width=1, dash="dot"))
-    for xi in [-0.83 + (1.66 / 3), -0.83 + 2 * (1.66 / 3)]:
+        fig.add_shape(type="line", x0=STRIKE_ZONE_LEFT, x1=STRIKE_ZONE_RIGHT, y0=yi, y1=yi,
+                      line=dict(color="rgba(200,200,200,0.25)", width=1, dash="dot"))
+    for xi in [-0.83 + (1.66/3), -0.83 + 2*(1.66/3)]:
         fig.add_shape(type="line", x0=xi, x1=xi, y0=sz_bot, y1=sz_top,
                       line=dict(color="rgba(200,200,200,0.25)", width=1, dash="dot"))
 
-    # Outer strike zone rectangle
-    fig.add_shape(
-        type="rect",
-        x0=STRIKE_ZONE_LEFT, x1=STRIKE_ZONE_RIGHT, y0=sz_bot, y1=sz_top,
-        line=dict(color="white", width=2),
-        fillcolor="rgba(255,255,255,0.03)",
-    )
+    fig.add_shape(type="rect", x0=STRIKE_ZONE_LEFT, x1=STRIKE_ZONE_RIGHT, y0=sz_bot, y1=sz_top,
+                  line=dict(color="white", width=2), fillcolor="rgba(255,255,255,0.03)")
 
-    # Home plate indicator (pentagon approximation)
-    plate_w = 0.708  # actual plate half-width
-    fig.add_shape(type="line", x0=-plate_w, x1=plate_w, y0=0.25, y1=0.25,
-                  line=dict(color="rgba(255,255,255,0.4)", width=1.5))
-    fig.add_shape(type="line", x0=-plate_w, x1=-plate_w, y0=0.25, y1=0.42,
-                  line=dict(color="rgba(255,255,255,0.4)", width=1.5))
-    fig.add_shape(type="line", x0=plate_w, x1=plate_w, y0=0.25, y1=0.42,
-                  line=dict(color="rgba(255,255,255,0.4)", width=1.5))
-    fig.add_shape(type="line", x0=-plate_w, x1=0, y0=0.42, y1=0.56,
-                  line=dict(color="rgba(255,255,255,0.4)", width=1.5))
-    fig.add_shape(type="line", x0=plate_w, x1=0, y0=0.42, y1=0.56,
-                  line=dict(color="rgba(255,255,255,0.4)", width=1.5))
+    pw = 0.708
+    for x0, x1, y0, y1 in [(-pw, pw, 0.25, 0.25), (-pw, -pw, 0.25, 0.42),
+                             (pw, pw, 0.25, 0.42), (-pw, 0, 0.42, 0.56), (pw, 0, 0.42, 0.56)]:
+        fig.add_shape(type="line", x0=x0, x1=x1, y0=y0, y1=y1,
+                      line=dict(color="rgba(255,255,255,0.35)", width=1.5))
 
-    # Group pitches by category
     cats = {c: {"x": [], "y": [], "text": []} for c in CAT_COLORS}
     for r in pitches:
         cat = _categorize(r)
         if cat and r.get("plate_x") is not None and r.get("plate_z") is not None:
             cats[cat]["x"].append(r["plate_x"])
             cats[cat]["y"].append(r["plate_z"])
-            cats[cat]["text"].append(_hover_text(r))
+            cats[cat]["text"].append(_hover(r))
 
-    # Add traces in order (incorrect on top)
-    order = ["correct_ball", "correct_strike", "missed_strike", "phantom_strike", "abs_overturned"]
-    for cat in order:
+    for cat in ("correct_ball", "correct_strike", "missed_strike", "phantom_strike", "abs_overturned"):
         d = cats[cat]
         if not d["x"]:
             continue
-        is_incorrect = cat in ("phantom_strike", "missed_strike", "abs_overturned")
+        incorrect = cat in ("phantom_strike", "missed_strike", "abs_overturned")
         fig.add_trace(go.Scattergl(
-            x=d["x"], y=d["y"],
-            mode="markers",
+            x=d["x"], y=d["y"], mode="markers",
             name=CAT_LABELS[cat],
-            marker=dict(
-                color=CAT_COLORS[cat],
-                symbol=CAT_SYMBOLS[cat],
-                size=7 if is_incorrect else 5,
-                opacity=0.85 if is_incorrect else 0.55,
-                line=dict(width=1, color=CAT_COLORS[cat]),
-            ),
-            text=d["text"],
-            hovertemplate="%{text}<extra></extra>",
+            marker=dict(color=CAT_COLORS[cat], symbol=CAT_SYMBOLS[cat],
+                        size=7 if incorrect else 5,
+                        opacity=0.85 if incorrect else 0.55,
+                        line=dict(width=1, color=CAT_COLORS[cat])),
+            text=d["text"], hovertemplate="%{text}<extra></extra>",
         ))
 
-    shown = len(pitches)
-    title_note = ""
-    if total_count > shown:
-        title_note = f" (showing {shown:,} of {total_count:,})"
-
+    note = f" (showing {len(pitches):,} of {total_count:,})" if total_count > len(pitches) else ""
     fig.update_layout(
-        paper_bgcolor=PLOT_PAPER,
-        plot_bgcolor=PLOT_BG,
+        paper_bgcolor=PLOT_PAPER, plot_bgcolor=PLOT_BG,
         font=dict(color=TEXT_COLOR, size=11),
         margin=dict(l=50, r=20, t=40, b=50),
-        legend=dict(
-            orientation="h",
-            yanchor="bottom", y=-0.18,
-            xanchor="center", x=0.5,
-            font=dict(size=10),
-            bgcolor="rgba(0,0,0,0)",
-        ),
-        xaxis=dict(
-            title="Horizontal Position (ft from plate center)",
-            range=[-2.5, 2.5],
-            zeroline=True, zerolinecolor=AXIS_COLOR, zerolinewidth=1,
-            gridcolor=AXIS_COLOR, showgrid=True,
-            tickfont=dict(size=10),
-            title_font=dict(size=11),
-        ),
-        yaxis=dict(
-            title="Height (ft from ground)",
-            range=[0.2, 5.2],
-            zeroline=False,
-            gridcolor=AXIS_COLOR, showgrid=True,
-            tickfont=dict(size=10),
-            title_font=dict(size=11),
-            scaleanchor="x", scaleratio=1,
-        ),
-        title=dict(
-            text=f"Strike Zone Plot{title_note}",
-            font=dict(size=13, color="#e6edf3"),
-            x=0.5, xanchor="center",
-        ),
-        hovermode="closest",
-        dragmode="pan",
-        height=580,
+        legend=dict(orientation="h", yanchor="bottom", y=-0.18, xanchor="center", x=0.5,
+                    font=dict(size=10), bgcolor="rgba(0,0,0,0)"),
+        xaxis=dict(title="Horizontal (ft from plate center)", range=[-2.5, 2.5],
+                   zeroline=True, zerolinecolor=AXIS_COLOR, gridcolor=AXIS_COLOR,
+                   tickfont=dict(size=10), title_font=dict(size=11)),
+        yaxis=dict(title="Height (ft from ground)", range=[0.2, 5.2],
+                   zeroline=False, gridcolor=AXIS_COLOR, tickfont=dict(size=10),
+                   title_font=dict(size=11), scaleanchor="x", scaleratio=1),
+        title=dict(text=f"Strike Zone Plot{note}",
+                   font=dict(size=13, color="#e6edf3"), x=0.5, xanchor="center"),
+        hovermode="closest", dragmode="pan", height=580,
     )
     return fig
 
 
 def build_density_figure(pitches, total_count):
-    """Build a miss-rate heatmap over the zone grid."""
     if not pitches:
         return _empty_fig("No data for density map.")
-
-    df = pd.DataFrame(pitches)
-    df = df.dropna(subset=["plate_x", "plate_z", "correct_call"])
-
+    df = pd.DataFrame(pitches).dropna(subset=["plate_x", "plate_z", "correct_call"])
     if df.empty:
         return _empty_fig("No called pitches to map.")
 
     xbins = np.linspace(-2, 2, 25)
     ybins = np.linspace(0.5, 5.5, 25)
-    dx = xbins[1] - xbins[0]
-    dy = ybins[1] - ybins[0]
-
-    total_grid = np.zeros((len(ybins) - 1, len(xbins) - 1))
-    wrong_grid = np.zeros_like(total_grid)
-
+    dx, dy = xbins[1]-xbins[0], ybins[1]-ybins[0]
+    total_g = np.zeros((len(ybins)-1, len(xbins)-1))
+    wrong_g = np.zeros_like(total_g)
     for _, r in df.iterrows():
         xi = int((r["plate_x"] - xbins[0]) / dx)
         yi = int((r["plate_z"] - ybins[0]) / dy)
-        if 0 <= xi < total_grid.shape[1] and 0 <= yi < total_grid.shape[0]:
-            total_grid[yi, xi] += 1
+        if 0 <= xi < total_g.shape[1] and 0 <= yi < total_g.shape[0]:
+            total_g[yi, xi] += 1
             if r["correct_call"] == 0:
-                wrong_grid[yi, xi] += 1
-
-    miss_rate = np.where(total_grid >= 5, wrong_grid / total_grid * 100, np.nan)
+                wrong_g[yi, xi] += 1
+    miss_rate = np.where(total_g >= 5, wrong_g / total_g * 100, np.nan)
 
     szs = [(r.get("sz_top"), r.get("sz_bot")) for r in pitches if r.get("sz_top") and r.get("sz_bot")]
     sz_top = float(np.median([s[0] for s in szs])) if szs else TYPICAL_SZ_TOP
@@ -319,27 +243,22 @@ def build_density_figure(pitches, total_count):
 
     xcen = (xbins[:-1] + xbins[1:]) / 2
     ycen = (ybins[:-1] + ybins[1:]) / 2
-
     fig = go.Figure()
     fig.add_trace(go.Heatmap(
         x=xcen, y=ycen, z=miss_rate,
         colorscale=[[0, "#2ecc71"], [0.1, "#f9c74f"], [0.25, "#f39c12"], [1.0, "#e74c3c"]],
         zmin=0, zmax=25,
         colorbar=dict(title="Miss %", thickness=12, len=0.7, tickfont=dict(size=10)),
-        hovertemplate="x=%{x:.2f}ft, z=%{y:.2f}ft<br>Miss rate: %{z:.1f}%<extra></extra>",
+        hovertemplate="x=%{x:.2f}ft z=%{y:.2f}ft<br>Miss rate: %{z:.1f}%<extra></extra>",
     ))
-
     fig.add_shape(type="rect", x0=STRIKE_ZONE_LEFT, x1=STRIKE_ZONE_RIGHT,
                   y0=sz_bot, y1=sz_top, line=dict(color="white", width=2))
-
     fig.update_layout(
-        paper_bgcolor=PLOT_PAPER, plot_bgcolor=PLOT_BG,
-        font=dict(color=TEXT_COLOR, size=11),
+        paper_bgcolor=PLOT_PAPER, plot_bgcolor=PLOT_BG, font=dict(color=TEXT_COLOR, size=11),
         margin=dict(l=50, r=20, t=40, b=50),
-        xaxis=dict(title="Horizontal Position (ft)", range=[-2.5, 2.5],
-                   gridcolor=AXIS_COLOR, tickfont=dict(size=10)),
+        xaxis=dict(title="Horizontal (ft)", range=[-2.5, 2.5], gridcolor=AXIS_COLOR),
         yaxis=dict(title="Height (ft)", range=[0.2, 5.2], gridcolor=AXIS_COLOR,
-                   tickfont=dict(size=10), scaleanchor="x", scaleratio=1),
+                   scaleanchor="x", scaleratio=1),
         title=dict(text=f"Miss Rate Density  (≥5 pitches/cell, n={len(df):,})",
                    font=dict(size=13, color="#e6edf3"), x=0.5, xanchor="center"),
         height=580,
@@ -361,44 +280,45 @@ def _empty_fig(msg="No data available."):
 # Layout helpers
 # ---------------------------------------------------------------------------
 
-def _kpi_card(card_id, label, color_class):
+def _kpi(cid, label, color_class):
     return dbc.Col(
         html.Div([
-            html.Div("—", id=f"kpi-{card_id}", className=f"kpi-value kpi-{color_class}"),
+            html.Div("—", id=f"kpi-{cid}", className=f"kpi-value kpi-{color_class}"),
             html.Div(label, className="kpi-label"),
         ], className="kpi-card"),
         xs=6, sm=4, md=True,
     )
 
 
-def _make_table(cols, table_id):
+def _lbl(text):
+    return html.Div(text, className="filter-label")
+
+
+def _no_data():
+    return html.Div("No data — apply filters and click Apply.", className="no-data-msg")
+
+
+def _make_table(cols, data):
     return dash_table.DataTable(
-        id=table_id,
-        columns=cols,
-        data=[],
-        page_size=12,
+        columns=cols, data=data, page_size=14,
         style_table={"overflowX": "auto"},
         style_cell={"backgroundColor": "#1c2333", "color": "#e6edf3",
-                    "border": "1px solid #30363d", "fontSize": "12px",
-                    "textAlign": "left", "padding": "6px 10px"},
+                    "border": "1px solid #30363d", "fontSize": "11.5px",
+                    "textAlign": "left", "padding": "5px 9px",
+                    "maxWidth": "200px", "overflow": "hidden", "textOverflow": "ellipsis"},
         style_header={"backgroundColor": "#0d1117", "fontWeight": "bold",
-                      "color": "#8b949e", "border": "1px solid #30363d"},
+                      "color": "#8b949e", "border": "1px solid #30363d", "fontSize": "11px"},
         style_data_conditional=[
-            {"if": {"column_id": "miss_rate"},
-             "background": "linear-gradient(90deg,transparent,rgba(231,76,60,0.25))",
-             "color": "#f39c12"},
             {"if": {"row_index": "odd"}, "backgroundColor": "rgba(255,255,255,0.02)"},
         ],
         sort_action="native",
-        filter_action="native",
+        tooltip_data=[{c["id"]: {"value": str(r.get(c["id"], "")), "type": "markdown"}
+                       for c in cols} for r in data],
+        tooltip_duration=None,
     )
 
 
-# ---------------------------------------------------------------------------
-# Layout
-# ---------------------------------------------------------------------------
-
-def _today_str():
+def _today():
     return str(date.today())
 
 
@@ -406,262 +326,219 @@ def _season_start():
     return "2025-03-20"
 
 
-def build_layout():
-    last = get_last_game_date()
-    first = get_first_game_date() or _season_start()
-    pitch_ct = get_pitch_count()
-    opts = get_filter_options()
+# ---------------------------------------------------------------------------
+# Layout
+# ---------------------------------------------------------------------------
 
-    last_updated = f"Last data: {last}" if last else "No data loaded — run: python update.py --full-season"
-    status_color = "#2ecc71" if last else "#e74c3c"
+def build_layout():
+    last   = get_last_game_date()
+    first  = get_first_game_date() or _season_start()
+    ct     = get_pitch_count()
+    opts   = get_dynamic_options({})   # initial options — all unfiltered
+
+    status_color  = "#2ecc71" if last else "#e74c3c"
+    last_updated  = f"Last data: {last}" if last else "No data — run: python update.py --full-season"
 
     return dbc.Container([
-        # ── Navbar ──────────────────────────────────────────────────────────
+        # ── Navbar ──────────────────────────────────────────────────────
         dbc.Navbar(
             dbc.Container([
-                html.A(
-                    dbc.Row([
-                        dbc.Col(html.Img(src="/assets/icon.svg", height="36px")),
-                        dbc.Col(html.Span([
-                            html.Span("Pitch", className="text-white fw-bold"),
-                            html.Span("Bot", style={"color": "#2ecc71", "fontWeight": "700"}),
-                        ], style={"fontSize": "1.4rem", "letterSpacing": "1px"})),
-                    ], align="center", className="g-2"),
-                    href="/", style={"textDecoration": "none"},
-                ),
+                html.A(dbc.Row([
+                    dbc.Col(html.Img(src="/assets/icon.svg", height="36px")),
+                    dbc.Col(html.Span([
+                        html.Span("Pitch", className="text-white fw-bold"),
+                        html.Span("Bot", style={"color": "#2ecc71", "fontWeight": "700"}),
+                    ], style={"fontSize": "1.4rem", "letterSpacing": "1px"})),
+                ], align="center", className="g-2"), href="/", style={"textDecoration": "none"}),
                 dbc.NavbarToggler(id="navbar-toggler"),
                 html.Span(last_updated, style={
-                    "fontSize": "0.72rem", "color": status_color,
-                    "marginLeft": "auto", "padding": "0.2rem 0.7rem",
-                    "background": "rgba(255,255,255,0.05)",
+                    "fontSize": "0.72rem", "color": status_color, "marginLeft": "auto",
+                    "padding": "0.2rem 0.7rem", "background": "rgba(255,255,255,0.05)",
                     "borderRadius": "12px", "border": f"1px solid {status_color}33",
                 }),
             ], fluid=True),
             color="dark", dark=True,
-            style={"background": "linear-gradient(90deg,#0d1117,#0f3460)", "borderBottom": "1px solid #30363d"},
+            style={"background": "linear-gradient(90deg,#0d1117,#0f3460)",
+                   "borderBottom": "1px solid #30363d"},
             className="mb-3",
         ),
 
-        # No-data banner
+        # ── No-data banner ───────────────────────────────────────────────
         dbc.Alert(
             [html.I(className="fa fa-database me-2"),
-             "No pitch data loaded. Run: ",
+             "No pitch data loaded.  Run: ",
              html.Code("python update.py --full-season"),
-             " to fetch the 2025 season, then refresh."],
-            id="no-data-alert",
-            color="warning",
-            dismissable=True,
-            is_open=pitch_ct == 0,
+             " then refresh."],
+            id="no-data-alert", color="warning", dismissable=True, is_open=(ct == 0),
             className="mb-3",
         ),
 
-        # ── Filter panel ────────────────────────────────────────────────────
+        # ── Filter panel ─────────────────────────────────────────────────
         dbc.Card([
             dbc.CardHeader(
                 dbc.Row([
                     dbc.Col(html.Span([
                         html.I(className="fa fa-filter me-2", style={"color": "#3498db"}),
                         html.Span("Filters", className="fw-semibold"),
+                        html.Small(" — dropdowns update live as you select",
+                                   style={"color": "#8b949e", "fontSize": "0.7rem", "marginLeft": "6px"}),
                     ])),
-                    dbc.Col(
-                        dbc.ButtonGroup([
-                            dbc.Button("Apply", id="btn-apply", color="primary", size="sm", n_clicks=0,
-                                       className="btn-apply"),
-                            dbc.Button("Reset", id="btn-reset", color="secondary", size="sm", n_clicks=0,
-                                       className="btn-reset"),
-                        ], size="sm"),
-                        width="auto",
-                    ),
+                    dbc.Col(dbc.ButtonGroup([
+                        dbc.Button("Apply", id="btn-apply", color="primary",  size="sm", n_clicks=0),
+                        dbc.Button("Reset", id="btn-reset", color="secondary", size="sm", n_clicks=0,
+                                   outline=True),
+                    ], size="sm"), width="auto"),
                 ], align="center"),
                 className="py-2",
             ),
             dbc.CardBody([
-                # Row 1: Date, Umpire, Team, Pitcher, Batter
+                # Row 1 — Date · Umpire · Hitting Team · Pitching Team · Pitcher
                 dbc.Row([
-                    dbc.Col([
-                        html.Div("Date Range", className="filter-label"),
-                        dcc.DatePickerRange(
-                            id="date-picker",
-                            start_date=first,
-                            end_date=last or _today_str(),
-                            display_format="MMM D, YYYY",
-                            style={"width": "100%"},
-                        ),
-                    ], xs=12, md=3),
-                    dbc.Col([
-                        html.Div("Umpire", className="filter-label"),
-                        dcc.Dropdown(id="filter-umpire", options=opts["umpires"],
-                                     multi=True, placeholder="All umpires",
-                                     style={"fontSize": "12px"}),
-                    ], xs=12, md=2),
-                    dbc.Col([
-                        html.Div("Team", className="filter-label"),
-                        dcc.Dropdown(id="filter-team", options=opts["teams"],
-                                     multi=True, placeholder="All teams",
-                                     style={"fontSize": "12px"}),
-                    ], xs=12, md=2),
-                    dbc.Col([
-                        html.Div("Pitcher", className="filter-label"),
-                        dcc.Dropdown(id="filter-pitcher", options=opts["pitchers"],
-                                     multi=True, placeholder="All pitchers",
-                                     style={"fontSize": "12px"}),
-                    ], xs=12, md=2),
-                    dbc.Col([
-                        html.Div("Batter", className="filter-label"),
-                        dcc.Dropdown(id="filter-batter", options=opts["batters"],
-                                     multi=True, placeholder="All batters",
-                                     style={"fontSize": "12px"}),
-                    ], xs=12, md=3),
+                    dbc.Col([_lbl("Date Range"),
+                             dcc.DatePickerRange(id="date-picker",
+                                                 start_date=first,
+                                                 end_date=last or _today(),
+                                                 display_format="MMM D, YYYY")],
+                            xs=12, md=3),
+                    dbc.Col([_lbl("Umpire"),
+                             dcc.Dropdown(id="filter-umpire", options=opts["umpires"],
+                                          multi=True, placeholder="All umpires",
+                                          style={"fontSize": "12px"})],
+                            xs=12, md=2),
+                    dbc.Col([_lbl("Hitting Team"),
+                             dcc.Dropdown(id="filter-hitting-team", options=opts["hitting_teams"],
+                                          multi=True, placeholder="All hitting teams",
+                                          style={"fontSize": "12px"})],
+                            xs=12, md=2),
+                    dbc.Col([_lbl("Pitching Team"),
+                             dcc.Dropdown(id="filter-pitching-team", options=opts["pitching_teams"],
+                                          multi=True, placeholder="All pitching teams",
+                                          style={"fontSize": "12px"})],
+                            xs=12, md=2),
+                    dbc.Col([_lbl("Pitcher"),
+                             dcc.Dropdown(id="filter-pitcher", options=opts["pitchers"],
+                                          multi=True, placeholder="All pitchers",
+                                          style={"fontSize": "12px"})],
+                            xs=12, md=3),
                 ], className="mb-2 gy-2"),
-                # Row 2: Pitch type, Throwing hand, Call type, ABS
+
+                # Row 2 — Batter · Pitch Type
                 dbc.Row([
-                    dbc.Col([
-                        html.Div("Pitch Type", className="filter-label"),
-                        dcc.Dropdown(id="filter-pitch-type", options=opts["pitch_types"],
-                                     multi=True, placeholder="All pitch types",
-                                     style={"fontSize": "12px"}),
-                    ], xs=12, md=4),
-                    dbc.Col([
-                        html.Div("Throwing Hand", className="filter-label"),
-                        dbc.RadioItems(
-                            id="filter-p-throws",
-                            options=[
-                                {"label": "Both", "value": "B"},
-                                {"label": "RHP", "value": "R"},
-                                {"label": "LHP", "value": "L"},
-                            ],
-                            value="B",
-                            inline=True,
-                            className="mt-1",
-                            inputStyle={"marginRight": "4px"},
-                            labelStyle={"fontSize": "12px", "marginRight": "12px"},
-                        ),
-                    ], xs=12, md=2),
-                    dbc.Col([
-                        html.Div("Call Correctness", className="filter-label"),
-                        dbc.RadioItems(
-                            id="filter-call-type",
-                            options=[
-                                {"label": "All called", "value": "all"},
-                                {"label": "Correct only", "value": "correct"},
-                                {"label": "Incorrect only", "value": "incorrect"},
-                            ],
-                            value="all",
-                            inline=True,
-                            className="mt-1",
-                            inputStyle={"marginRight": "4px"},
-                            labelStyle={"fontSize": "12px", "marginRight": "12px"},
-                        ),
-                    ], xs=12, md=3),
-                    dbc.Col([
-                        html.Div("ABS Status", className="filter-label"),
-                        dbc.RadioItems(
-                            id="filter-abs",
-                            options=[
-                                {"label": "All", "value": "all"},
-                                {"label": "ABS Overturned", "value": "overturned"},
-                            ],
-                            value="all",
-                            inline=True,
-                            className="mt-1",
-                            inputStyle={"marginRight": "4px"},
-                            labelStyle={"fontSize": "12px", "marginRight": "12px"},
-                        ),
-                    ], xs=12, md=3),
+                    dbc.Col([_lbl("Batter"),
+                             dcc.Dropdown(id="filter-batter", options=opts["batters"],
+                                          multi=True, placeholder="All batters",
+                                          style={"fontSize": "12px"})],
+                            xs=12, md=6),
+                    dbc.Col([_lbl("Pitch Type"),
+                             dcc.Dropdown(id="filter-pitch-type", options=opts["pitch_types"],
+                                          multi=True, placeholder="All pitch types",
+                                          style={"fontSize": "12px"})],
+                            xs=12, md=6),
+                ], className="mb-2 gy-2"),
+
+                # Row 3 — Throwing Hand · Call Correctness · ABS
+                dbc.Row([
+                    dbc.Col([_lbl("Throwing Hand"),
+                             dbc.RadioItems(
+                                 id="filter-p-throws",
+                                 options=[{"label": "Both", "value": "B"},
+                                          {"label": "RHP",  "value": "R"},
+                                          {"label": "LHP",  "value": "L"}],
+                                 value="B", inline=True, className="mt-1",
+                                 inputStyle={"marginRight": "4px"},
+                                 labelStyle={"fontSize": "12px", "marginRight": "12px"})],
+                            xs=12, md=3),
+                    dbc.Col([_lbl("Call Correctness"),
+                             dbc.RadioItems(
+                                 id="filter-call-type",
+                                 options=[{"label": "All called",     "value": "all"},
+                                          {"label": "Correct only",   "value": "correct"},
+                                          {"label": "Incorrect only", "value": "incorrect"}],
+                                 value="all", inline=True, className="mt-1",
+                                 inputStyle={"marginRight": "4px"},
+                                 labelStyle={"fontSize": "12px", "marginRight": "12px"})],
+                            xs=12, md=5),
+                    dbc.Col([_lbl("ABS Challenge"),
+                             dbc.RadioItems(
+                                 id="filter-abs",
+                                 options=[{"label": "All",           "value": "all"},
+                                          {"label": "ABS Overturned","value": "overturned"}],
+                                 value="all", inline=True, className="mt-1",
+                                 inputStyle={"marginRight": "4px"},
+                                 labelStyle={"fontSize": "12px", "marginRight": "12px"})],
+                            xs=12, md=4),
                 ], className="gy-2"),
             ], className="py-2"),
         ], className="filter-card mb-3"),
 
-        # ── KPI cards ───────────────────────────────────────────────────────
+        # ── KPI cards ─────────────────────────────────────────────────────
         dbc.Row([
-            _kpi_card("total",    "Called Pitches",    "white"),
-            _kpi_card("pct",      "Correct Call %",    "green"),
-            _kpi_card("phantom",  "Phantom Strikes",   "red"),
-            _kpi_card("missed",   "Missed Strikes",    "orange"),
-            _kpi_card("abs",      "ABS Overturned",    "purple"),
+            _kpi("total",   "Called Pitches",  "white"),
+            _kpi("pct",     "Correct Call %",  "green"),
+            _kpi("phantom", "Phantom Strikes", "red"),
+            _kpi("missed",  "Missed Strikes",  "orange"),
+            _kpi("abs",     "ABS Overturned",  "purple"),
         ], className="mb-3 gy-2"),
 
-        # ── Main content ────────────────────────────────────────────────────
+        # ── Main content ──────────────────────────────────────────────────
         dbc.Row([
-            # Zone plot (left)
             dbc.Col([
                 dbc.Card([
-                    dbc.CardHeader(
-                        dbc.Row([
-                            dbc.Col(html.Span("Strike Zone", className="fw-semibold")),
-                            dbc.Col(
-                                dbc.ButtonGroup([
-                                    dbc.Button("Scatter", id="btn-scatter", size="sm", n_clicks=0,
-                                               color="primary", outline=False,
-                                               style={"fontSize": "11px"}),
-                                    dbc.Button("Density", id="btn-density", size="sm", n_clicks=0,
-                                               color="secondary", outline=True,
-                                               style={"fontSize": "11px"}),
-                                ], size="sm"),
-                                width="auto",
-                            ),
-                        ], align="center"),
-                        className="py-2",
-                    ),
+                    dbc.CardHeader(dbc.Row([
+                        dbc.Col(html.Span("Strike Zone", className="fw-semibold")),
+                        dbc.Col(dbc.ButtonGroup([
+                            dbc.Button("Scatter", id="btn-scatter", size="sm", n_clicks=0,
+                                       color="primary", outline=False,
+                                       style={"fontSize": "11px"}),
+                            dbc.Button("Density", id="btn-density", size="sm", n_clicks=0,
+                                       color="secondary", outline=True,
+                                       style={"fontSize": "11px"}),
+                        ], size="sm"), width="auto"),
+                    ], align="center"), className="py-2"),
                     dbc.CardBody([
-                        dcc.Loading(
-                            dcc.Graph(
-                                id="zone-plot",
-                                config={"displayModeBar": True, "modeBarButtonsToRemove": ["lasso2d"],
-                                        "scrollZoom": True},
-                                figure=_empty_fig("Apply filters to load pitches."),
-                            ),
-                            type="circle", color="#2ecc71",
-                        ),
+                        dcc.Loading(dcc.Graph(id="zone-plot",
+                                              config={"scrollZoom": True,
+                                                      "modeBarButtonsToRemove": ["lasso2d"]},
+                                              figure=_empty_fig("Apply filters to load pitches.")),
+                                    type="circle", color="#2ecc71"),
                         html.Div(id="plot-meta",
-                                 style={"fontSize": "11px", "color": "#8b949e", "textAlign": "right",
-                                        "marginTop": "4px"}),
+                                 style={"fontSize": "11px", "color": "#8b949e",
+                                        "textAlign": "right", "marginTop": "4px"}),
                     ], className="p-2"),
                 ], className="plot-card"),
             ], xs=12, lg=7),
 
-            # Analysis panel (right)
             dbc.Col([
                 dbc.Card([
-                    dbc.CardHeader(
-                        dbc.Tabs(
-                            id="analysis-tabs",
-                            active_tab="tab-most-missed",
-                            children=[
-                                dbc.Tab(label="Most Missed",  tab_id="tab-most-missed"),
-                                dbc.Tab(label="By Umpire",    tab_id="tab-umpire"),
-                                dbc.Tab(label="By Pitcher",   tab_id="tab-pitcher"),
-                                dbc.Tab(label="By Batter",    tab_id="tab-batter"),
-                            ],
-                            style={"fontSize": "12px"},
-                        ),
-                        className="p-0",
-                    ),
-                    dbc.CardBody(
-                        dcc.Loading(
-                            html.Div(id="analysis-content"),
-                            type="circle", color="#3498db",
-                        ),
-                        className="p-2",
-                    ),
+                    dbc.CardHeader(dbc.Tabs(
+                        id="analysis-tabs", active_tab="tab-most-missed",
+                        children=[
+                            dbc.Tab(label="Most Missed", tab_id="tab-most-missed"),
+                            dbc.Tab(label="By Umpire",   tab_id="tab-umpire"),
+                            dbc.Tab(label="By Pitcher",  tab_id="tab-pitcher"),
+                            dbc.Tab(label="By Batter",   tab_id="tab-batter"),
+                        ],
+                        style={"fontSize": "12px"},
+                    ), className="p-0"),
+                    dbc.CardBody(dcc.Loading(html.Div(id="analysis-content"),
+                                             type="circle", color="#3498db"),
+                                 className="p-2"),
                 ], className="plot-card"),
             ], xs=12, lg=5),
         ], className="mb-3"),
 
-        # Footer
+        # ── Footer ───────────────────────────────────────────────────────
         html.Hr(style={"borderColor": "#30363d"}),
-        dbc.Row([
-            dbc.Col(html.Small([
-                "Data: MLB Statcast via ",
-                html.A("Baseball Savant", href="https://baseballsavant.mlb.com",
-                       target="_blank", style={"color": "#3498db"}),
-                " | Incorrect call = pitch called ball/strike outside/inside the Statcast strike zone",
-            ], style={"color": "#8b949e"})),
-        ], className="mb-3"),
+        dbc.Row([dbc.Col(html.Small([
+            "Data: MLB Statcast via ",
+            html.A("Baseball Savant", href="https://baseballsavant.mlb.com",
+                   target="_blank", style={"color": "#3498db"}),
+            " | ABS data: MLB Stats API play-by-play | "
+            "Incorrect call = pitch called outside/inside the Statcast strike zone",
+        ], style={"color": "#8b949e"}))], className="mb-3"),
 
-        # Hidden state store
         dcc.Store(id="filter-store", data={}),
-        dcc.Store(id="view-store", data="scatter"),
+        dcc.Store(id="view-store",   data="scatter"),
     ], fluid=True, className="py-2")
 
 
@@ -672,135 +549,162 @@ app.layout = build_layout
 # Callbacks
 # ---------------------------------------------------------------------------
 
-def _collect_filters(start_date, end_date, umpires, teams, pitchers, batters,
-                     pitch_types, p_throws, call_type, abs_filter):
-    return {
-        "start_date": start_date,
-        "end_date": end_date,
-        "umpires": umpires or [],
-        "teams": teams or [],
-        "pitchers": pitchers or [],
-        "batters": batters or [],
-        "pitch_types": pitch_types or [],
-        "p_throws": p_throws or "B",
-        "call_type": call_type or "all",
-        "abs_filter": abs_filter or "all",
-    }
+# 1. Dynamic cascading options — fires on every filter change
+@callback(
+    Output("filter-umpire",        "options"),
+    Output("filter-hitting-team",  "options"),
+    Output("filter-pitching-team", "options"),
+    Output("filter-pitcher",       "options"),
+    Output("filter-batter",        "options"),
+    Output("filter-pitch-type",    "options"),
+    Input("date-picker",           "start_date"),
+    Input("date-picker",           "end_date"),
+    Input("filter-umpire",         "value"),
+    Input("filter-hitting-team",   "value"),
+    Input("filter-pitching-team",  "value"),
+    Input("filter-pitcher",        "value"),
+    Input("filter-batter",         "value"),
+    Input("filter-pitch-type",     "value"),
+    Input("filter-p-throws",       "value"),
+    Input("filter-call-type",      "value"),
+    Input("filter-abs",            "value"),
+)
+def update_filter_options(start_date, end_date, umpires, hitting_teams, pitching_teams,
+                           pitchers, batters, pitch_types, p_throws, call_type, abs_filter):
+    opts = get_dynamic_options({
+        "start_date":    start_date,
+        "end_date":      end_date,
+        "umpires":       umpires       or [],
+        "hitting_teams": hitting_teams or [],
+        "pitching_teams":pitching_teams or [],
+        "pitchers":      pitchers      or [],
+        "batters":       batters       or [],
+        "pitch_types":   pitch_types   or [],
+        "p_throws":      p_throws      or "B",
+        "call_type":     call_type     or "all",
+        "abs_filter":    abs_filter    or "all",
+    })
+    return (opts["umpires"], opts["hitting_teams"], opts["pitching_teams"],
+            opts["pitchers"], opts["batters"], opts["pitch_types"])
 
 
-# Update filter store on Apply click
+# 2. Apply button → store filter state for visualisations
 @callback(
     Output("filter-store", "data"),
     Input("btn-apply", "n_clicks"),
-    State("date-picker", "start_date"),
-    State("date-picker", "end_date"),
-    State("filter-umpire", "value"),
-    State("filter-team", "value"),
-    State("filter-pitcher", "value"),
-    State("filter-batter", "value"),
-    State("filter-pitch-type", "value"),
-    State("filter-p-throws", "value"),
-    State("filter-call-type", "value"),
-    State("filter-abs", "value"),
+    State("date-picker",           "start_date"),
+    State("date-picker",           "end_date"),
+    State("filter-umpire",         "value"),
+    State("filter-hitting-team",   "value"),
+    State("filter-pitching-team",  "value"),
+    State("filter-pitcher",        "value"),
+    State("filter-batter",         "value"),
+    State("filter-pitch-type",     "value"),
+    State("filter-p-throws",       "value"),
+    State("filter-call-type",      "value"),
+    State("filter-abs",            "value"),
     prevent_initial_call=False,
 )
-def store_filters(n_clicks, start_date, end_date, umpires, teams, pitchers,
-                  batters, pitch_types, p_throws, call_type, abs_filter):
-    return _collect_filters(start_date, end_date, umpires, teams, pitchers,
-                            batters, pitch_types, p_throws, call_type, abs_filter)
+def store_filters(_, start_date, end_date, umpires, hitting_teams, pitching_teams,
+                  pitchers, batters, pitch_types, p_throws, call_type, abs_filter):
+    return {
+        "start_date":     start_date,
+        "end_date":       end_date,
+        "umpires":        umpires        or [],
+        "hitting_teams":  hitting_teams  or [],
+        "pitching_teams": pitching_teams or [],
+        "pitchers":       pitchers       or [],
+        "batters":        batters        or [],
+        "pitch_types":    pitch_types    or [],
+        "p_throws":       p_throws       or "B",
+        "call_type":      call_type      or "all",
+        "abs_filter":     abs_filter     or "all",
+    }
 
 
-# Reset all filters
+# 3. Reset
 @callback(
-    Output("date-picker", "start_date"),
-    Output("date-picker", "end_date"),
-    Output("filter-umpire", "value"),
-    Output("filter-team", "value"),
-    Output("filter-pitcher", "value"),
-    Output("filter-batter", "value"),
-    Output("filter-pitch-type", "value"),
-    Output("filter-p-throws", "value"),
-    Output("filter-call-type", "value"),
-    Output("filter-abs", "value"),
+    Output("date-picker",           "start_date"),
+    Output("date-picker",           "end_date"),
+    Output("filter-umpire",         "value"),
+    Output("filter-hitting-team",   "value"),
+    Output("filter-pitching-team",  "value"),
+    Output("filter-pitcher",        "value"),
+    Output("filter-batter",         "value"),
+    Output("filter-pitch-type",     "value"),
+    Output("filter-p-throws",       "value"),
+    Output("filter-call-type",      "value"),
+    Output("filter-abs",            "value"),
     Input("btn-reset", "n_clicks"),
     prevent_initial_call=True,
 )
 def reset_filters(_):
-    first = get_first_game_date() or _season_start()
-    last = get_last_game_date() or _today_str()
-    return first, last, None, None, None, None, None, "B", "all", "all"
+    return (get_first_game_date() or _season_start(),
+            get_last_game_date()  or _today(),
+            None, None, None, None, None, None, "B", "all", "all")
 
 
-# Track scatter vs density view
+# 4. Scatter vs density toggle
 @callback(
-    Output("view-store", "data"),
-    Output("btn-scatter", "color"),
-    Output("btn-scatter", "outline"),
-    Output("btn-density", "color"),
-    Output("btn-density", "outline"),
-    Input("btn-scatter", "n_clicks"),
-    Input("btn-density", "n_clicks"),
+    Output("view-store",    "data"),
+    Output("btn-scatter",   "color"),
+    Output("btn-scatter",   "outline"),
+    Output("btn-density",   "color"),
+    Output("btn-density",   "outline"),
+    Input("btn-scatter",    "n_clicks"),
+    Input("btn-density",    "n_clicks"),
     prevent_initial_call=True,
 )
-def toggle_view(n_scatter, n_density):
-    triggered = ctx.triggered_id
-    if triggered == "btn-density":
+def toggle_view(*_):
+    if ctx.triggered_id == "btn-density":
         return "density", "secondary", True, "primary", False
     return "scatter", "primary", False, "secondary", True
 
 
-# KPI cards
+# 5. KPI cards
 @callback(
-    Output("kpi-total", "children"),
-    Output("kpi-pct", "children"),
+    Output("kpi-total",   "children"),
+    Output("kpi-pct",     "children"),
     Output("kpi-phantom", "children"),
-    Output("kpi-missed", "children"),
-    Output("kpi-abs", "children"),
+    Output("kpi-missed",  "children"),
+    Output("kpi-abs",     "children"),
     Input("filter-store", "data"),
 )
 def update_kpis(filters):
-    if not filters:
-        filters = {}
-    s = query_summary_stats(filters)
-    total = s.get("total", 0)
+    s = query_summary_stats(filters or {})
+    total   = s.get("total",   0)
     correct = s.get("correct", 0)
-    phantom = s.get("phantom_strikes", 0)
-    missed = s.get("missed_strikes", 0)
-    abs_ot = s.get("abs_overturned", 0)
-    pct = f"{100 * correct / total:.1f}%" if total > 0 else "—"
-    return (
-        f"{total:,}",
-        pct,
-        f"{phantom:,}",
-        f"{missed:,}",
-        f"{abs_ot:,}",
-    )
+    pct     = f"{100*correct/total:.1f}%" if total > 0 else "—"
+    return (f"{total:,}", pct,
+            f"{s.get('phantom_strikes',0):,}",
+            f"{s.get('missed_strikes', 0):,}",
+            f"{s.get('abs_overturned', 0):,}")
 
 
-# Zone plot + meta
+# 6. Zone plot
 @callback(
     Output("zone-plot", "figure"),
     Output("plot-meta", "children"),
     Input("filter-store", "data"),
-    Input("view-store", "data"),
+    Input("view-store",   "data"),
 )
 def update_zone_plot(filters, view):
     filters = filters or {}
-    total = query_summary_stats(filters).get("total", 0)
+    total   = query_summary_stats(filters).get("total", 0)
     pitches = query_pitches(filters, limit=15000)
     if not pitches:
         return _empty_fig("No pitches match the current filters."), ""
-    meta = f"{len(pitches):,} pitches shown" + (f" of {total:,}" if total > len(pitches) else "")
-    if view == "density":
-        return build_density_figure(pitches, total), meta
-    return build_scatter_figure(pitches, total), meta
+    meta = (f"{len(pitches):,} pitches shown"
+            + (f" of {total:,}" if total > len(pitches) else ""))
+    fig = build_density_figure(pitches, total) if view == "density" else build_scatter_figure(pitches, total)
+    return fig, meta
 
 
-# Analysis tabs content
+# 7. Analysis tabs
 @callback(
     Output("analysis-content", "children"),
-    Input("filter-store", "data"),
-    Input("analysis-tabs", "active_tab"),
+    Input("filter-store",      "data"),
+    Input("analysis-tabs",     "active_tab"),
 )
 def update_analysis(filters, active_tab):
     filters = filters or {}
@@ -811,107 +715,64 @@ def update_analysis(filters, active_tab):
             return _no_data()
         df = pd.DataFrame(rows)
         df["pitch_name"] = df["pitch_type"].map(lambda x: PITCH_NAMES.get(x, x or "?"))
-        df["hand"] = df["p_throws"].map({"R": "RHP", "L": "LHP"}).fillna("?")
-        df["miss_rate"] = df["miss_rate"].map(lambda v: f"{v:.1f}%")
-        cols_def = [
-            {"name": "Pitch", "id": "pitch_name"},
-            {"name": "Hand", "id": "hand"},
-            {"name": "Called", "id": "called"},
-            {"name": "Incorrect", "id": "incorrect"},
-            {"name": "Miss %", "id": "miss_rate"},
-        ]
+        df["hand"]       = df["p_throws"].map({"R": "RHP", "L": "LHP"}).fillna("?")
+        df["miss_rate"]  = df["miss_rate"].map(lambda v: f"{v:.1f}%")
         return html.Div([
             html.Div("Miss rate by pitch type × throwing hand (≥10 called pitches)",
                      className="section-header mt-1"),
-            _make_table_static(
-                cols_def,
-                df[["pitch_name", "hand", "called", "incorrect", "miss_rate"]].to_dict("records"),
+            _make_table(
+                [{"name": "Pitch", "id": "pitch_name"}, {"name": "Hand", "id": "hand"},
+                 {"name": "Called", "id": "called"}, {"name": "Incorrect", "id": "incorrect"},
+                 {"name": "Miss %", "id": "miss_rate"}],
+                df[["pitch_name","hand","called","incorrect","miss_rate"]].to_dict("records"),
             ),
         ])
 
     if active_tab == "tab-umpire":
-        rows = query_by_group("umpire", filters, limit=25)
+        rows = query_by_group("umpire", filters)
         if not rows:
             return _no_data()
-        cols_def = [
-            {"name": "Umpire", "id": "group"},
-            {"name": "Called", "id": "called"},
-            {"name": "Incorrect", "id": "incorrect"},
-            {"name": "Miss %", "id": "miss_rate"},
-        ]
-        data = [{"group": r["group"], "called": r["called"], "incorrect": r["incorrect"],
-                 "miss_rate": f"{r['miss_rate']:.1f}%"} for r in rows]
+        data = [{"group": r["group"], "called": r["called"],
+                 "incorrect": r["incorrect"], "miss_rate": f"{r['miss_rate']:.1f}%"} for r in rows]
         return html.Div([
-            html.Div("Umpires ranked by miss rate (≥10 called pitches)",
-                     className="section-header mt-1"),
-            _make_table_static(cols_def, data),
+            html.Div("Umpires ranked by miss rate (≥10 called)", className="section-header mt-1"),
+            _make_table([{"name": "Umpire",    "id": "group"},
+                         {"name": "Called",    "id": "called"},
+                         {"name": "Incorrect", "id": "incorrect"},
+                         {"name": "Miss %",    "id": "miss_rate"}], data),
         ])
 
     if active_tab == "tab-pitcher":
-        rows = query_by_group("pitcher_name", filters, limit=25)
+        rows = query_by_group("pitcher_name", filters)
         if not rows:
             return _no_data()
-        cols_def = [
-            {"name": "Pitcher", "id": "group"},
-            {"name": "Called", "id": "called"},
-            {"name": "Incorrect", "id": "incorrect"},
-            {"name": "Miss %", "id": "miss_rate"},
-        ]
-        data = [{"group": r["group"], "called": r["called"], "incorrect": r["incorrect"],
-                 "miss_rate": f"{r['miss_rate']:.1f}%"} for r in rows]
+        data = [{"group": r["group"], "called": r["called"],
+                 "incorrect": r["incorrect"], "miss_rate": f"{r['miss_rate']:.1f}%"} for r in rows]
         return html.Div([
             html.Div("Pitchers with highest miss-call rate against them (≥10 called)",
                      className="section-header mt-1"),
-            _make_table_static(cols_def, data),
+            _make_table([{"name": "Pitcher",   "id": "group"},
+                         {"name": "Called",    "id": "called"},
+                         {"name": "Incorrect", "id": "incorrect"},
+                         {"name": "Miss %",    "id": "miss_rate"}], data),
         ])
 
     if active_tab == "tab-batter":
-        rows = query_by_group("batter_id", filters, limit=25)
+        rows = query_by_group("batter_id", filters)
         if not rows:
             return _no_data()
-        cols_def = [
-            {"name": "Batter", "id": "group"},
-            {"name": "Called", "id": "called"},
-            {"name": "Incorrect", "id": "incorrect"},
-            {"name": "Miss %", "id": "miss_rate"},
-        ]
-        data = [{"group": r["group"], "called": r["called"], "incorrect": r["incorrect"],
-                 "miss_rate": f"{r['miss_rate']:.1f}%"} for r in rows]
+        data = [{"group": r["group"], "called": r["called"],
+                 "incorrect": r["incorrect"], "miss_rate": f"{r['miss_rate']:.1f}%"} for r in rows]
         return html.Div([
             html.Div("Batters with highest miss-call rate against them (≥10 called)",
                      className="section-header mt-1"),
-            _make_table_static(cols_def, data),
+            _make_table([{"name": "Batter",    "id": "group"},
+                         {"name": "Called",    "id": "called"},
+                         {"name": "Incorrect", "id": "incorrect"},
+                         {"name": "Miss %",    "id": "miss_rate"}], data),
         ])
 
     return _no_data()
-
-
-def _make_table_static(cols, data):
-    return dash_table.DataTable(
-        columns=cols,
-        data=data,
-        page_size=14,
-        style_table={"overflowX": "auto"},
-        style_cell={"backgroundColor": "#1c2333", "color": "#e6edf3",
-                    "border": "1px solid #30363d", "fontSize": "11.5px",
-                    "textAlign": "left", "padding": "5px 9px",
-                    "maxWidth": "180px", "overflow": "hidden",
-                    "textOverflow": "ellipsis"},
-        style_header={"backgroundColor": "#0d1117", "fontWeight": "bold",
-                      "color": "#8b949e", "border": "1px solid #30363d",
-                      "fontSize": "11px"},
-        style_data_conditional=[
-            {"if": {"row_index": "odd"}, "backgroundColor": "rgba(255,255,255,0.02)"},
-        ],
-        sort_action="native",
-        tooltip_data=[{c["id"]: {"value": str(row.get(c["id"], "")), "type": "markdown"}
-                       for c in cols} for row in data],
-        tooltip_duration=None,
-    )
-
-
-def _no_data():
-    return html.Div("No data — apply filters and click Apply.", className="no-data-msg")
 
 
 # ---------------------------------------------------------------------------
