@@ -5,3 +5,4 @@ pandas>=2.0.0
 numpy>=1.24.0
 pybaseball>=2.2.5
 requests>=2.31.0
+Pillow>=10.0.0
